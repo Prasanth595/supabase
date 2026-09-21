@@ -52,6 +52,7 @@ import { useIsStorageVersioningEnabled } from '@/components/interfaces/App/Featu
 import { ButtonTooltip } from '@/components/ui/ButtonTooltip'
 import { ShortcutTooltip } from '@/components/ui/ShortcutTooltip'
 import { useAsyncCheckPermissions } from '@/hooks/misc/useCheckPermissions'
+import { onSearchInputEscape } from '@/lib/keyboard'
 import { useTrack } from '@/lib/telemetry/track'
 import { SHORTCUT_IDS } from '@/state/shortcuts/registry'
 import { useStorageExplorerStateSnapshot } from '@/state/storage-explorer'
@@ -180,10 +181,7 @@ export const FileExplorerHeader = ({
   const breadcrumbs = columns.map((column) => column.name)
   const isListView = view === STORAGE_VIEWS.LIST
   const isBucketRoot = breadcrumbs.length <= 1
-  const currentFolderName = breadcrumbs[breadcrumbs.length - 1]
-  const searchPlaceholder = isBucketRoot
-    ? 'Search in root directory...'
-    : `Search in ${currentFolderName}...`
+  const searchPlaceholder = `Search ${snap.selectedBucket.name}...`
   const { can: canUpdateStorage } = useAsyncCheckPermissions(PermissionAction.STORAGE_WRITE, '*')
 
   useFileExplorerHeaderShortcuts({
@@ -191,8 +189,6 @@ export const FileExplorerHeader = ({
     searchInputRef,
     canUpdateStorage,
     hasBreadcrumbs: breadcrumbs.length > 0,
-    isSearching: snap.isSearching,
-    setIsSearching: snap.setIsSearching,
     addNewFolderPlaceholder,
     setView,
   })
@@ -232,7 +228,7 @@ export const FileExplorerHeader = ({
   const togglePathEdit = () => {
     setIsPathDialogOpen(true)
     setPathString(breadcrumbs.slice(1).join('/'))
-    if (snap.isSearching) onCancelSearch()
+    if (itemSearchString.length > 0) onCancelSearch()
   }
 
   const onUpdatePathString = (event: ChangeEvent<HTMLInputElement>) => {
@@ -260,17 +256,12 @@ export const FileExplorerHeader = ({
   }
 
   /** Methods for searching */
-  // Search is currently within local scope when the view is set to list
-  // Searching for column view requires much more thinking
   const onCancelSearch = () => {
-    snap.setIsSearching(false)
     setItemSearchString('')
   }
 
   const onSearchChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const value = event.target.value
-    setItemSearchString(value)
-    snap.setIsSearching(value.length > 0)
+    setItemSearchString(event.target.value)
   }
 
   const refreshData = async () => {
@@ -300,31 +291,39 @@ export const FileExplorerHeader = ({
                 }}
               />
             )}
-            <Input
-              ref={searchInputRef}
-              size="tiny"
-              className="w-52"
-              icon={<SearchIcon />}
-              actions={
-                itemSearchString.length > 0
-                  ? [
-                      <Button
-                        key="cancel"
-                        size="tiny"
-                        variant="text"
-                        icon={<XIcon />}
-                        onClick={onCancelSearch}
-                        className="p-0 h-5 w-5"
-                      />,
-                    ]
-                  : undefined
-              }
-              placeholder={searchPlaceholder}
-              type="text"
-              value={itemSearchString}
-              onChange={onSearchChange}
-              onFocus={() => setIsPathDialogOpen(false)}
-            />
+            <ShortcutTooltip
+              shortcutId={SHORTCUT_IDS.STORAGE_EXPLORER_FOCUS_SEARCH}
+              label="Search bucket"
+              side="bottom"
+            >
+              <Input
+                ref={searchInputRef}
+                size="tiny"
+                className="w-52"
+                icon={<SearchIcon />}
+                actions={
+                  itemSearchString.length > 0
+                    ? [
+                        <Button
+                          key="cancel"
+                          size="tiny"
+                          variant="text"
+                          aria-label="Clear search"
+                          icon={<XIcon />}
+                          onClick={onCancelSearch}
+                          className="p-0 h-5 w-5"
+                        />,
+                      ]
+                    : undefined
+                }
+                placeholder={searchPlaceholder}
+                type="text"
+                value={itemSearchString}
+                onChange={onSearchChange}
+                onKeyDown={onSearchInputEscape(itemSearchString, onCancelSearch)}
+                onFocus={() => setIsPathDialogOpen(false)}
+              />
+            </ShortcutTooltip>
           </div>
 
           <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
