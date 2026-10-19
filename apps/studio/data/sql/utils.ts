@@ -30,6 +30,37 @@ export function trimTrailingSemicolons(sql: SafeSqlFragment): SafeSqlFragment {
   return sql.replace(/;+\s*$/, '') as SafeSqlFragment
 }
 
+// A statement is limitable when it reads and nothing else. `select ...` is the
+// obvious case; `with ... select ...` is the same shape but was previously
+// skipped, so the editor's row limit silently did not apply to any CTE query
+// (supabase/supabase#51879).
+//
+// Postgres also allows data-modifying CTEs — `with x as (...) insert into ...`,
+// `with d as (delete ... returning *) select * from d` — and `select ... into`
+// creates a table, so none of those may be limited. In keeping with the note
+// above this file stays keyword-based rather than parsing, but string literals
+// and quoted identifiers are dropped first so that text which merely looks like
+// a write (`select 'update' as k`, a column named "delete") does not needlessly
+// disqualify a read-only query.
+function isLimitableSelect(cleanedSql: string): boolean {
+  const lower = cleanedSql.toLowerCase()
+  if (lower.startsWith('select')) return true
+  if (!lower.startsWith('with')) return false
+
+  // Dollar-quoted strings (`$$...$$`), `E''` escape strings and block comments
+  // cannot be masked reliably with a regex: a quote inside one dollar-quoted
+  // literal pairs with a quote in the next, which can hide a write keyword
+  // between them. Rather than risk limiting a statement that writes, leave
+  // anything containing those constructs alone.
+  if (/\$\w*\$|(^|[^a-z0-9_$])e'|\/\*/i.test(cleanedSql)) return false
+
+  const withoutLiterals = cleanedSql
+    .replace(/'(?:[^']|'')*'/g, "''")
+    .replace(/"(?:[^"]|"")*"/g, '""')
+
+  return !/\b(insert|update|delete|merge|into)\b/i.test(withoutLiterals)
+}
+
 // [Joshen] Just FYI as well the checks here on whether to append limit is quite restricted
 // This is to prevent dashboard from accidentally appending limit to the end of a query
 // thats not supposed to have any, since there's too many cases to cover.
@@ -64,7 +95,7 @@ export function applyAutoLimit(
     limit > 0 &&
     !hasComments &&
     !hasMultipleQueries &&
-    cleanedSql.toLowerCase().startsWith('select') &&
+    isLimitableSelect(cleanedSql) &&
     !cleanedSql.toLowerCase().match(/fetch\s+(first|next)/i) &&
     !cleanedSql.match(/limit$/i) &&
     !cleanedSql.match(/limit;$/i) &&

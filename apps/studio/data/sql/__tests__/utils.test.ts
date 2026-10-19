@@ -100,6 +100,75 @@ describe('trimTrailingSemicolons', () => {
 })
 
 describe('applyAutoLimit', () => {
+  test('Should return true for a read-only CTE (supabase/supabase#51879)', () => {
+    const sql = safeSql`with numbers as (select generate_series(1, 2000) as n) select n from numbers;`
+    const { appendAutoLimit } = applyAutoLimit(sql, 100)
+    expect(appendAutoLimit).toBe(true)
+  })
+  test('Should return true for a read-only CTE regardless of casing', () => {
+    const sql = safeSql`WITH numbers AS (SELECT 1 AS n) SELECT n FROM numbers;`
+    const { appendAutoLimit } = applyAutoLimit(sql, 100)
+    expect(appendAutoLimit).toBe(true)
+  })
+  test('Should return false if a CTE query already has a limit', () => {
+    const sql = safeSql`with x as (select 1) select * from x limit 5;`
+    const { appendAutoLimit } = applyAutoLimit(sql, 100)
+    expect(appendAutoLimit).toBe(false)
+  })
+  test('Should return true for a read-only CTE whose columns merely look like writes', () => {
+    const sql = safeSql`with recent as (select id, updated_at, deleted_at from t) select * from recent;`
+    const { appendAutoLimit } = applyAutoLimit(sql, 100)
+    expect(appendAutoLimit).toBe(true)
+  })
+  test('Should return true when a write keyword only appears inside a string literal', () => {
+    const sql = safeSql`with a as (select 'update' as k) select * from a;`
+    const { appendAutoLimit } = applyAutoLimit(sql, 100)
+    expect(appendAutoLimit).toBe(true)
+  })
+  test('Should return true when a write keyword is only a quoted identifier', () => {
+    const sql = safeSql`with a as (select 1 as "delete") select * from a;`
+    const { appendAutoLimit } = applyAutoLimit(sql, 100)
+    expect(appendAutoLimit).toBe(true)
+  })
+  test('Should return false for a CTE that writes a new table with select into', () => {
+    const sql = safeSql`with a as (select 1) select * into t from a;`
+    const { appendAutoLimit } = applyAutoLimit(sql, 100)
+    expect(appendAutoLimit).toBe(false)
+  })
+  test('Should not limit when a dollar-quoted literal could hide a write keyword', () => {
+    // The quote inside the first $$'$$ pairs with the one in the second, which
+    // would mask `into` if literals were stripped with a plain regex.
+    const sql = safeSql`with a as (select $$'$$ as s from generate_series(1, 200)) select s into t from a where s = $$'$$;`
+    const { sql: result, appendAutoLimit } = applyAutoLimit(sql, 100)
+    expect(appendAutoLimit).toBe(false)
+    expect(result).toBe(sql)
+  })
+  test('Should not limit when an E escape string could hide a write keyword', () => {
+    const sql = safeSql`with a as (select E'\'' as s) select s into t from a where s = E'\'';`
+    const { sql: result, appendAutoLimit } = applyAutoLimit(sql, 100)
+    expect(appendAutoLimit).toBe(false)
+    expect(result).toBe(sql)
+  })
+  test('Should still limit a read-only CTE that uses like without a space', () => {
+    const sql = safeSql`with a as (select k from t) select * from a where k like'%x%';`
+    const { appendAutoLimit } = applyAutoLimit(sql, 100)
+    expect(appendAutoLimit).toBe(true)
+  })
+  test('Should return false for a data-modifying CTE that inserts', () => {
+    const sql = safeSql`with x as (select 1 as n) insert into t select n from x;`
+    const { appendAutoLimit } = applyAutoLimit(sql, 100)
+    expect(appendAutoLimit).toBe(false)
+  })
+  test('Should return false for a data-modifying CTE that deletes and returns', () => {
+    const sql = safeSql`with d as (delete from t returning *) select * from d;`
+    const { appendAutoLimit } = applyAutoLimit(sql, 100)
+    expect(appendAutoLimit).toBe(false)
+  })
+  test('Should return false for a data-modifying CTE that updates and returns', () => {
+    const sql = safeSql`with u as (update t set a = 1 returning *) select * from u;`
+    const { appendAutoLimit } = applyAutoLimit(sql, 100)
+    expect(appendAutoLimit).toBe(false)
+  })
   test('Should return false if limit passed is <= 0', () => {
     const sql = safeSql`select * from countries;`
     const limit = -1
