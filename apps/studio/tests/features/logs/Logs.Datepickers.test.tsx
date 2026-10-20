@@ -36,6 +36,34 @@ beforeEach(() => {
 })
 
 describe('inline and popover date-picker state', () => {
+  test.each(['inline', 'popover'] as const)(
+    '%s submits seconds and clears its input with Escape',
+    async (variant) => {
+      const user = userEvent.setup()
+      const onSubmit = vi.fn()
+      customRender(
+        <LogsDatePicker
+          variant={variant}
+          value={{ from: new Date().toISOString(), to: new Date().toISOString() }}
+          helpers={[]}
+          onSubmit={onSubmit}
+        />
+      )
+      if (variant === 'popover') await user.click(screen.getByRole('button'))
+      const input = screen.getByPlaceholderText('e.g. 10s, 30m, 2h')
+      await user.type(input, '10s')
+      await user.keyboard('{Escape}')
+      expect(input).toHaveValue('')
+      expect(input).toHaveFocus()
+      await user.type(input, '10s')
+      await user.click(screen.getByText('Last 10 seconds'))
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({ text: 'Last 10 seconds', isHelper: true })
+      )
+      const selected = onSubmit.mock.lastCall?.[0]
+      expect(Date.parse(selected.to) - Date.parse(selected.from)).toBe(10_000)
+    }
+  )
   const initialRange = {
     from: '2026-08-01T01:02:03.000Z',
     to: '2026-08-02T04:05:06.000Z',
@@ -213,10 +241,12 @@ describe('generateDynamicHelper', () => {
 describe('generateDynamicHelpers', () => {
   test('generates helpers for every supported relative unit', () => {
     const helpers = generateDynamicHelpers(5)
-    expect(helpers).toHaveLength(3)
-    expect(helpers[0].text).toBe('Last 5 minutes')
-    expect(helpers[1].text).toBe('Last 5 hours')
-    expect(helpers[2].text).toBe('Last 5 days')
+    expect(helpers.map(({ text }) => text)).toEqual([
+      'Last 5 seconds',
+      'Last 5 minutes',
+      'Last 5 hours',
+      'Last 5 days',
+    ])
   })
 })
 
@@ -229,10 +259,12 @@ describe('generateHelpersFromInput', () => {
 
   test('returns a helper for every unit for number only input', () => {
     const helpers = generateHelpersFromInput('25')
-    expect(helpers).toHaveLength(3)
-    expect(helpers![0].text).toBe('Last 25 minutes')
-    expect(helpers![1].text).toBe('Last 25 hours')
-    expect(helpers![2].text).toBe('Last 25 days')
+    expect(helpers?.map(({ text }) => text)).toEqual([
+      'Last 25 seconds',
+      'Last 25 minutes',
+      'Last 25 hours',
+      'Last 25 days',
+    ])
   })
 
   test('returns single helper for unit input', () => {
@@ -292,8 +324,8 @@ test('renders dates in local time', async () => {
 })
 
 test('renders datepicker selected dates in local time', async () => {
-  const from = dayjs().date(25)
-  const to = dayjs().date(27)
+  const from = dayjs().date(25).second(37).millisecond(0)
+  const to = dayjs().date(27).second(37).millisecond(0)
   render(
     <LogsDatePicker
       helpers={PREVIEWER_DATEPICKER_HELPERS}
@@ -308,7 +340,7 @@ test('renders datepicker selected dates in local time', async () => {
   await userEvent.click(await screen.findByText(RegExp(from.format('DD MMM'))))
   // inputs with local time
   await screen.findByText(
-    `${from.format('DD MMM')}, ${from.format('HH:mm')} - ${to.format('DD MMM')}, ${to.format('HH:mm')}`
+    `${from.format('DD MMM')}, ${from.format('HH:mm:ss')} - ${to.format('DD MMM')}, ${to.format('HH:mm:ss')}`
   )
   // selected date should be in local time
   await screen.findByText('25', { selector: "*[aria-label*='selected'" })
@@ -397,8 +429,8 @@ test('disabled helpers are disabled', async () => {
 })
 
 test('passing a value prop shows the correct dates in the label', async () => {
-  const from = dayjs().subtract(10, 'days')
-  const to = dayjs()
+  const from = dayjs().subtract(10, 'days').startOf('minute')
+  const to = dayjs().startOf('minute')
 
   render(
     <LogsDatePicker
