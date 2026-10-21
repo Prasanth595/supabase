@@ -16,7 +16,7 @@ vi.mock('@/state/storage-explorer', () => ({
 vi.mock('./useStoragePreference', () => ({
   useStoragePreference: () => mockUseStoragePreference(),
 }))
-// The columns themselves are irrelevant here — only the scroll container's geometry is.
+// The columns themselves are irrelevant here — only the scroll container's geometry is
 vi.mock('./FileExplorerColumn', () => ({
   FileExplorerColumn: () => <div data-testid="column" />,
 }))
@@ -57,7 +57,6 @@ function applyLayout(
 /** The callbacks have runtime defaults but are required by the prop type. */
 const noopProps = {
   selectedItems: [],
-  itemSearchString: '',
   onFilesUpload: vi.fn(),
   onSelectAllItemsInColumn: vi.fn(),
   onSelectColumnEmptySpace: vi.fn(),
