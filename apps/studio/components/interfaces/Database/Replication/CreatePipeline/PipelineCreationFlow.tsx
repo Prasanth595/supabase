@@ -20,7 +20,10 @@ import { PipelineDataSection } from './PipelineDataSection'
 import { PipelineDestinationReview } from './PipelineDestinationReview'
 import { PipelineDestinationSelection } from './PipelineDestinationSelection'
 import { PipelineReviewCosts } from './PipelineReviewCosts'
-import { PipelineValidationAdmonition } from './PipelineValidationAdmonition'
+import {
+  PipelineValidationAdmonition,
+  SANDWICHED_ADMONITION_CLASS,
+} from './PipelineValidationAdmonition'
 import { usePipelineConnectionValidation } from './usePipelineConnectionValidation'
 import { usePipelineCreationSubmission } from './usePipelineCreationSubmission'
 import { usePipelineDataValidation } from './usePipelineDataValidation'
@@ -70,12 +73,19 @@ export const PipelineCreationFlow = ({
   const { validateConnection, resetValidation, isValidating, isConnectionVerified, failures } =
     usePipelineConnectionValidation({ projectRef, type, form })
   const sourceId = useReplicationSourceId({ projectRef })
-  const { validateData, isValidatingData, isDataVerified, dataError, publication } =
-    usePipelineDataValidation({ projectRef, sourceId, type, form })
+  const {
+    validateData,
+    isValidatingData,
+    isDataVerified,
+    dataError,
+    hasPublicationLoadError,
+    publication,
+  } = usePipelineDataValidation({ projectRef, sourceId, type, form })
   const {
     handleSubmit,
     isSubmitting,
-    failures: submissionFailures,
+    destinationValidationFailures,
+    pipelineValidationFailures,
     submitLabel,
   } = usePipelineCreationSubmission({
     type,
@@ -83,6 +93,10 @@ export const PipelineCreationFlow = ({
     validateData,
     onCreated: () => completeNavigation(onClose),
   })
+  const submissionFailures = [...destinationValidationFailures, ...pipelineValidationFailures]
+  const hasCriticalFailures = submissionFailures.some(
+    ({ failure_type }) => failure_type === 'critical'
+  )
   const isBusy = isValidating || isValidatingData || isSubmitting
   const accessibleStep = (() => {
     if (isSubmitting) return step
@@ -171,15 +185,21 @@ export const PipelineCreationFlow = ({
                     form={form}
                     onSelectNewPublication={() => setIsPublicationPanelVisible(true)}
                     revealInvalidSettings
+                    showTableLoadError={false}
                   />
-                  {dataError && (
+                  {(hasPublicationLoadError || dataError) && (
                     <Admonition
-                      type="destructive"
-                      title="Check data settings"
-                      className="mb-0 rounded-none border-x-0 border-t border-b-0 border-default"
-                    >
-                      {dataError}
-                    </Admonition>
+                      type="danger"
+                      title={
+                        hasPublicationLoadError
+                          ? 'Publication tables could not be loaded'
+                          : 'Check data settings'
+                      }
+                      description={
+                        hasPublicationLoadError ? 'Click Continue to try again.' : dataError
+                      }
+                      className={SANDWICHED_ADMONITION_CLASS}
+                    />
                   )}
                 </>
               )}
@@ -190,6 +210,7 @@ export const PipelineCreationFlow = ({
                     control={form.control}
                     onEditDestination={() => void setStep('destination')}
                     onEditConnection={() => void setStep('connection')}
+                    validationFailures={destinationValidationFailures}
                   />
                   <Separator />
                   <PipelineDataReview
@@ -197,10 +218,23 @@ export const PipelineCreationFlow = ({
                     control={form.control}
                     publication={publication}
                     onEdit={() => void setStep('data')}
+                    validationFailures={pipelineValidationFailures}
                   />
                   <Separator />
                   <PipelineReviewCosts control={form.control} publication={publication} />
-                  <PipelineValidationAdmonition failures={submissionFailures} />
+                  <div role="status" aria-label="Pipeline validation status">
+                    {submissionFailures.length > 0 && (
+                      <Admonition
+                        className={SANDWICHED_ADMONITION_CLASS}
+                        type={hasCriticalFailures ? 'danger' : 'warning'}
+                        description={
+                          hasCriticalFailures
+                            ? 'Fix the above issues before starting the pipeline.'
+                            : 'Review the warnings above before starting the pipeline.'
+                        }
+                      />
+                    )}
+                  </div>
                 </>
               )}
             </SteppedFlow>
