@@ -1,3 +1,4 @@
+import { keepPreviousData } from '@tanstack/react-query'
 import { LOCAL_STORAGE_KEYS, useParams } from 'common'
 import { EllipsisVerticalIcon, PencilIcon, RotateCwIcon, SendIcon, Trash2Icon } from 'lucide-react'
 import { useRouter } from 'next/router'
@@ -77,6 +78,7 @@ import { SHORTCUT_IDS } from '@/state/shortcuts/registry'
 import { useShortcut } from '@/state/shortcuts/useShortcut'
 
 const PANEL_VALUES = ['create', 'edit'] as const
+const DELIVERIES_PAGE_SIZE = 5
 
 interface PlatformWebhooksPageProps {
   scope: WebhookScope
@@ -120,6 +122,8 @@ export const PlatformWebhooksPage = ({ scope, endpointId }: PlatformWebhooksPage
     'deliverySearch',
     parseAsString.withDefault('').withOptions({ history: 'replace', clearOnDefault: true })
   )
+  const [deliveryCursor, setDeliveryCursor] = useState<{ after?: string; before?: string }>({})
+  const [deliveryPage, setDeliveryPage] = useState(1)
 
   const [endpointIdPendingDelete, setEndpointIdPendingDelete] = useState<string | null>(null)
   const [signingSecretReveal, setSigningSecretReveal] = useState<{ signingSecret: string } | null>(
@@ -153,9 +157,33 @@ export const PlatformWebhooksPage = ({ scope, endpointId }: PlatformWebhooksPage
     () => endpoints.find((endpoint) => endpoint.id === endpointId) ?? null,
     [endpoints, endpointId]
   )
-  const { data: deliveries = [] } = useWebhookDeliveriesQuery(
-    { scope: apiScope, endpointId: selectedEndpoint?.id ?? '' },
-    { enabled: queryEnabled && !!selectedEndpoint }
+
+  // Reset synchronously during render, not in a useEffect — an effect runs after this
+  // render has already queried deliveries using the previous endpoint's leftover cursor,
+  // which can briefly leak that endpoint's deliveries onto the newly selected one.
+  const [cursorResetForEndpointId, setCursorResetForEndpointId] = useState(selectedEndpoint?.id)
+  if (selectedEndpoint?.id !== cursorResetForEndpointId) {
+    setCursorResetForEndpointId(selectedEndpoint?.id)
+    setDeliveryCursor({})
+    setDeliveryPage(1)
+  }
+
+  const {
+    data: { deliveries, nextCursor, previousCursor } = {
+      deliveries: [],
+      nextCursor: null,
+      previousCursor: null,
+    },
+    isPlaceholderData: isDeliveriesPagePending,
+  } = useWebhookDeliveriesQuery(
+    {
+      scope: apiScope,
+      endpointId: selectedEndpoint?.id ?? '',
+      size: DELIVERIES_PAGE_SIZE,
+      after: deliveryCursor.after,
+      before: deliveryCursor.before,
+    },
+    { enabled: queryEnabled && !!selectedEndpoint, placeholderData: keepPreviousData }
   )
   const {
     data: selectedDelivery = null,
@@ -227,6 +255,12 @@ export const PlatformWebhooksPage = ({ scope, endpointId }: PlatformWebhooksPage
       setPendingCreatedEndpointId(null)
     }
   }, [endpointId, pendingCreatedEndpointId, selectedEndpoint])
+
+  const handleDeliverySearchChange = (value: string) => {
+    setDeliveryCursor({})
+    setDeliveryPage(1)
+    setDeliverySearch(value)
+  }
 
   useEffect(() => {
     if (signingSecretReveal || !endpointId) return
@@ -369,6 +403,9 @@ export const PlatformWebhooksPage = ({ scope, endpointId }: PlatformWebhooksPage
       console.error('Failed to send webhook test event', error)
       return
     }
+    // A new delivery always lands on the first page — jump there so it's visible.
+    setDeliveryCursor({})
+    setDeliveryPage(1)
     toast.success('Test event sent — check deliveries shortly')
   }
 
@@ -404,6 +441,9 @@ export const PlatformWebhooksPage = ({ scope, endpointId }: PlatformWebhooksPage
       console.error('Failed to retry webhook delivery', error)
       return
     }
+    // A retried delivery is a new delivery — it lands on the first page too.
+    setDeliveryCursor({})
+    setDeliveryPage(1)
     toast.success('Delivery queued for retry')
   }
 
@@ -525,14 +565,27 @@ export const PlatformWebhooksPage = ({ scope, endpointId }: PlatformWebhooksPage
               />
             ) : (
               <PlatformWebhooksEndpointDetails
+                deliveryPage={deliveryPage}
                 deliverySearch={deliverySearch}
                 filteredDeliveries={filteredDeliveries}
+                hasNextDeliveriesPage={!isDeliveriesPagePending && !!nextCursor}
+                hasPreviousDeliveriesPage={!isDeliveriesPagePending && deliveryPage > 1}
                 selectedEndpoint={selectedEndpoint}
                 onCopyUrl={() => handleCopy(selectedEndpoint.url, 'endpoint URL')}
-                onDeliverySearchChange={setDeliverySearch}
+                onDeliverySearchChange={handleDeliverySearchChange}
+                onNextDeliveriesPage={() => {
+                  setDeliveryCursor({ after: nextCursor ?? undefined })
+                  setDeliveryPage((page) => page + 1)
+                }}
                 onOpenDelivery={(id) => {
                   setDeliveryDetailsTab('event')
                   setDeliveryId(id)
+                }}
+                onPreviousDeliveriesPage={() => {
+                  setDeliveryCursor(
+                    deliveryPage <= 2 ? {} : { before: previousCursor ?? undefined }
+                  )
+                  setDeliveryPage((page) => Math.max(1, page - 1))
                 }}
                 onRetryDelivery={handleRetryDelivery}
               />

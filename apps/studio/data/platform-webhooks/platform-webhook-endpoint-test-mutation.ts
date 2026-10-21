@@ -36,7 +36,7 @@ export const useWebhookEndpointTestMutation = ({
     async onSuccess(data, variables, context) {
       // The test delivery lands asynchronously — invalidate so it shows up once it does.
       await queryClient.invalidateQueries({
-        queryKey: platformWebhooksKeys.deliveries(variables.scope, variables.id),
+        queryKey: platformWebhooksKeys.deliveriesList(variables.scope, variables.id),
       })
 
       await onSuccess?.(data, variables, context)

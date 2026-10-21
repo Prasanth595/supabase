@@ -14,15 +14,53 @@ interface WebhookDeliveriesVariables {
   before?: string
 }
 
+const extractCursor = (link: string | null | undefined, param: 'page[after]' | 'page[before]') => {
+  if (!link) return null
+  return new URL(link, 'http://localhost').searchParams.get(param)
+}
+
+const DEFAULT_PAGE_SIZE = 5
+
+export interface WebhookDeliveriesData {
+  deliveries: WebhookDelivery[]
+  nextCursor: string | null
+  previousCursor: string | null
+}
+
 async function getWebhookDeliveries(
   { scope, endpointId, size, after, before }: WebhookDeliveriesVariables,
   signal?: AbortSignal
-): Promise<WebhookDelivery[]> {
-  const result = await listWebhookDeliveries(scope, endpointId, { size, after, before }, signal)
-  return (result?.data ?? []).map((delivery) => toWebhookDelivery(delivery, endpointId))
-}
+): Promise<WebhookDeliveriesData> {
+  const pageSize = size ?? DEFAULT_PAGE_SIZE
+  // The server's `links.next` can be present even when nothing actually follows (it
+  // reflects "this page was full", not "more data exists"). Ask for one extra record
+  // to find out for certain: getting it back means there's really a next page.
+  const result = await listWebhookDeliveries(
+    scope,
+    endpointId,
+    { size: pageSize + 1, after, before },
+    signal
+  )
+  const resources = result?.data ?? []
+  const hasExtraRecord = resources.length > pageSize
+  const deliveries = resources
+    .slice(0, pageSize)
+    .map((delivery) => toWebhookDelivery(delivery, endpointId))
 
-export type WebhookDeliveriesData = Awaited<ReturnType<typeof getWebhookDeliveries>>
+  // The server's `links.next` points after the lookahead record itself (the one we
+  // fetched but didn't display), which would skip it entirely on the next page. Use the
+  // last *displayed* record's id instead, so the lookahead record becomes page 2's first
+  // row rather than disappearing. When paging backward (`before` set) and this page
+  // doesn't overflow past `pageSize`, there's no extra record to anchor to — but a next
+  // page still exists: it's exactly the page we navigated back from, starting at `before`.
+  const nextCursor = hasExtraRecord ? (resources[pageSize - 1]?.id ?? null) : (before ?? null)
+
+  return {
+    deliveries,
+    nextCursor,
+    previousCursor: extractCursor(result?.links.prev, 'page[before]'),
+  }
+}
 
 export const useWebhookDeliveriesQuery = <TData = WebhookDeliveriesData>(
   variables: WebhookDeliveriesVariables,
