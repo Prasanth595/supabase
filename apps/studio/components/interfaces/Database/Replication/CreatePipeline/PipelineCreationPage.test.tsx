@@ -1,7 +1,7 @@
 import { QueryClient } from '@tanstack/react-query'
 import { fireEvent, screen } from '@testing-library/react'
 import type { components } from 'api-types'
-import { HttpResponse } from 'msw'
+import { delay, HttpResponse } from 'msw'
 import { beforeEach, expect, it, vi } from 'vitest'
 
 import { replicationKeys } from '@/data/replication/keys'
@@ -47,6 +47,18 @@ vi.mock('@/components/interfaces/Database/Replication/useIsETLPrivateAlpha', () 
   useIsETLSnowflakePrivateAlpha: () => false,
   useIsETLClickHousePrivateAlpha: () => false,
 }))
+vi.mock('@/components/layouts/Navigation/LayoutHeader/HomeIcon', () => ({
+  HomeIcon: () => <span>Supabase home</span>,
+}))
+vi.mock('@/components/layouts/AppLayout/OrganizationDropdown', () => ({
+  OrganizationDropdown: () => <span>Organization</span>,
+}))
+vi.mock('@/components/layouts/Navigation/NavigationBar/OrgSelector', () => ({
+  OrgSelector: () => <span>Organization</span>,
+}))
+vi.mock('@/components/layouts/AppLayout/ProjectDropdown', () => ({
+  ProjectDropdown: () => <span>Project</span>,
+}))
 vi.mock('./PipelineCreationFlow', () => ({
   PipelineCreationFlow: ({ onClose }: { onClose: () => void }) => (
     <button tabIndex={0} onClick={onClose}>
@@ -62,6 +74,7 @@ const mockSources = (sources: components['schemas']['SourcesResponse_Output']['s
     response: () => HttpResponse.json<components['schemas']['SourcesResponse_Output']>({ sources }),
   })
 beforeEach(() => {
+  state.push.mockClear()
   mockSources([
     {
       id: 42,
@@ -118,7 +131,9 @@ it('falls back when the preview is off even if organisation and project queries 
   state.orgPending = true
   state.flagsLoaded = false
   customRender(<PipelineCreationPage />)
-  expect(screen.getByRole('status')).toHaveTextContent('Returning to Pipelines')
+  expect(screen.getByRole('status', { name: 'Pipeline creation status' })).toHaveTextContent(
+    'Opening Pipelines…'
+  )
 })
 
 it('returns through the shared router without reloading the toast host', async () => {
@@ -142,7 +157,7 @@ it.each(['disabled', 'error'])(
           ),
       })
     customRender(<PipelineCreationPage />)
-    expect(await screen.findByRole('status')).toHaveTextContent('Returning to Pipelines')
+    expect(await screen.findByText('Returning to Pipelines…')).toBeInTheDocument()
     expect(screen.queryByText('Wizard form')).not.toBeInTheDocument()
   }
 )
@@ -151,7 +166,7 @@ it.each([false, true])('waits for the project reference (preview: %s)', (enabled
   state.enabled = enabled
   state.hasProjectRef = false
   customRender(<PipelineCreationPage />)
-  expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  expect(screen.queryByText('Returning to Pipelines…')).not.toBeInTheDocument()
   expect(screen.queryByText('Wizard form')).not.toBeInTheDocument()
 })
 it('rechecks cached enablement before allowing direct entry', async () => {
@@ -173,8 +188,80 @@ it('rechecks cached enablement before allowing direct entry', async () => {
   })
   customRender(<PipelineCreationPage />, { queryClient })
   expect(screen.queryByText('Wizard form')).not.toBeInTheDocument()
-  expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  expect(screen.queryByText('Returning to Pipelines…')).not.toBeInTheDocument()
   finish?.()
-  expect(await screen.findByRole('status')).toHaveTextContent('Returning to Pipelines')
+  expect(await screen.findByText('Returning to Pipelines…')).toBeInTheDocument()
+  expect(screen.getByRole('navigation', { name: 'Pipeline creation' })).toBeInTheDocument()
   expect(screen.queryByText('Wizard form')).not.toBeInTheDocument()
+})
+
+it('keeps the header and disabled destination step visible while preview access loads', () => {
+  state.loading = true
+  customRender(<PipelineCreationPage />)
+  expect(screen.getByRole('navigation', { name: 'Pipeline creation' })).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'Choose a destination' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled()
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+  expect(state.push).toHaveBeenCalledWith('/project/default/database/pipelines')
+})
+
+it('keeps the header visible while source enablement loads', async () => {
+  addAPIMock({
+    method: 'get',
+    path: '/platform/replication/:ref/sources',
+    response: async () => {
+      await delay('infinite')
+      return HttpResponse.json<components['schemas']['SourcesResponse_Output']>({ sources: [] })
+    },
+  })
+  customRender(<PipelineCreationPage />)
+  expect(await screen.findByRole('navigation', { name: 'Pipeline creation' })).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'Choose a destination' })).toBeInTheDocument()
+  expect(screen.queryByText('Wizard form')).not.toBeInTheDocument()
+})
+
+it('keeps the same live status when loading finishes and the wizard is ready', async () => {
+  state.loading = true
+  const { rerender } = customRender(<PipelineCreationPage />)
+  const status = screen.getByRole('status', { name: 'Pipeline creation status' })
+  expect(status).toHaveTextContent('Loading pipeline creation…')
+
+  state.loading = false
+  rerender(<PipelineCreationPage />)
+
+  expect(await screen.findByText('Wizard form')).toBeInTheDocument()
+  expect(screen.getByRole('status', { name: 'Pipeline creation status' })).toBe(status)
+  expect(status).toHaveTextContent('Pipeline creation ready')
+})
+
+it('keeps the same live status when loading finishes with a redirect', () => {
+  state.loading = true
+  const { rerender } = customRender(<PipelineCreationPage />)
+  const status = screen.getByRole('status', { name: 'Pipeline creation status' })
+  expect(status).toHaveTextContent('Loading pipeline creation…')
+
+  state.loading = false
+  state.enabled = false
+  rerender(<PipelineCreationPage />)
+
+  expect(screen.getByRole('status', { name: 'Pipeline creation status' })).toBe(status)
+  expect(status).toHaveTextContent('Opening Pipelines…')
+})
+
+it('disables Close until the project reference is available', () => {
+  state.hasProjectRef = false
+  state.loading = true
+  const { rerender } = customRender(<PipelineCreationPage />)
+  const close = screen.getByRole('button', { name: 'Close' })
+  expect(close).toBeDisabled()
+  fireEvent.click(close)
+  expect(state.push).not.toHaveBeenCalled()
+
+  state.hasProjectRef = true
+  rerender(<PipelineCreationPage />)
+
+  expect(close).toBeEnabled()
+  fireEvent.click(close)
+  expect(state.push).toHaveBeenCalledWith('/project/default/database/pipelines')
 })
